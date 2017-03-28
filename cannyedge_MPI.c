@@ -202,11 +202,38 @@ void gradient_phase(float *v_grad, float *h_grad, float **mag, float **phase,
 }
 
 void convolve(float *image, float **output, float *kernel, int height, 
-		int width, int k_height, int k_width){
+		int width, int k_height, int k_width, int comm_size, int comm_rank){
+
+	float *bot = image + width*((height/comm_size)-1);
+	int ghost_siz = width*floor(k_height/2);
 	
-	*output = (float*)malloc(sizeof(float)*height*width);
+	MPI_Status status;
 	
-	// Iter pixels
+	*output = (float*)malloc(sizeof(float)*width*(height/comm_size + 2*floor(k_height/2)));
+
+	if(comm_rank==0){
+		printf("Sending from %d\n", comm_rank);
+		// send bot to top of comm_rank+1
+		MPI_Send(image+width*(height/comm_size-ghost_siz), ghost_siz, MPI_FLOAT, 
+				1, 1, MPI_COMM_WORLD);
+		// receive top of rank+1
+	}
+	else if(comm_rank==comm_size){
+		printf("Receiving from %d\n", comm_rank);
+		//receive bot of rank-1
+		MPI_Recv(image, ghost_siz, MPI_FLOAT, comm_rank-1, 0, MPI_COMM_WORLD, &status);
+	}
+	else{
+		//receive bot from rank-1
+		//receive top of rank+1
+	}
+
+	// Added for debugging purposes. On personal machine same node handles
+	// multiple proc tasks and causes sync issues.
+	MPI_Barrier(MPI_COMM_WORLD);
+	
+	
+	// Iter pixels and convolve
 	for(int i=0; i<height; i++){
 		for(int j=0; j<width; j++){
 			float sum = 0;
@@ -301,8 +328,8 @@ int main(int argc, char **argv){
 		MPI_Bcast(&height, 1, MPI_INT, 0, MPI_COMM_WORLD);
 		MPI_Bcast(&width, 1, MPI_INT, 0, MPI_COMM_WORLD);
 		MPI_Bcast(&k_width, 1, MPI_INT, 0, MPI_COMM_WORLD);
-		MPI_Bcast(g_kernel, k_width, MPI_INT, 0, MPI_COMM_WORLD);
-		MPI_Bcast(dg_kernel, k_width, MPI_INT, 0, MPI_COMM_WORLD);
+		MPI_Bcast(g_kernel, k_width, MPI_FLOAT, 0, MPI_COMM_WORLD);
+		MPI_Bcast(dg_kernel, k_width, MPI_FLOAT, 0, MPI_COMM_WORLD);
 
 		// Dispatch chunks or original to nodes
 		// NOTE: Need to add additional room for ghost rows
@@ -313,20 +340,20 @@ int main(int argc, char **argv){
 				width*(height/comm_size), MPI_FLOAT, 0, MPI_COMM_WORLD);
 
 		// Convolve Each Subimage
-		convolve(subimage, &t_hor, g_kernel, height/comm_size, width, k_width, 1);
-
-		// Convolve Each subimage
-		convolve(t_hor, &th_grad, dg_kernel, height, width, 1, k_width);
+		convolve(subimage, &t_hor, g_kernel, height/comm_size, width, k_width, 1,
+				comm_size, comm_rank);
+		/*
+		convolve(t_hor, &th_grad, dg_kernel, height, width, 1, k_width,
+				comm_size, comm_rank);
 			
-		// Gather subimages and write
+		// Aggregate subimages
 		MPI_Gather(th_grad, width*(height/comm_size), MPI_FLOAT, h_grad, 
 				width*(height/comm_size), MPI_FLOAT, 0, MPI_COMM_WORLD);
-		//write_image_template("h_grad.pgm", h_grad, width, height);
 		
 		// Added for debugging purposes. On personal machine same node handles
 		// multiple proc tasks and causes sync issues.
 		MPI_Barrier(MPI_COMM_WORLD);
-
+		*/
 		MPI_Finalize();
 		
 		if(comm_rank==0){
