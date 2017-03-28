@@ -270,48 +270,71 @@ int main(int argc, char **argv){
 		struct timeval start, end;
 		float *g_kernel, *dg_kernel, *t_hor, *t_ver, *image, 
 		      *h_grad, *v_grad, *mag, *phase, *sup, *hyst, 
-		      *subimage, *edges;	
+		      *subimage, *edges, *th_grad;	
 
-		read_image_template(argv[1],
-				    &image,
-				    &width,
-				    &height);
-		
-		create_gaussians(&g_kernel, &dg_kernel, atof(argv[2]), &k_width);
-	
-		printf("Gaussian Kernel:\n");
-		print_matrix(g_kernel, 1, k_width);
-		printf("Derivative Kernel:\n");
-		print_matrix(dg_kernel,1,k_width);
-
-		gettimeofday(&start, NULL);
-		
 		MPI_Init(&argc,&argv);
 		MPI_Comm_size(MPI_COMM_WORLD, &comm_size);
+		
+		create_gaussians(&g_kernel, &dg_kernel, atof(argv[2]), &k_width);
+		
+		if(comm_rank==0){
+			read_image_template(argv[1],
+				    	&image,
+				    	&width,
+				    	&height);
 
-		printf("Processing %s using %d nodes...\n", argv[1], comm_size);
+			h_grad = (float*)malloc(sizeof(float)*width*height);
+			
+			printf("Gaussian Kernel:\n");
+			print_matrix(g_kernel, 1, k_width);
+			printf("Derivative Kernel:\n");
+			print_matrix(dg_kernel,1,k_width);
+		
+			printf("Processing %s using %d nodes...\n", argv[1], comm_size);
 
+			create_gaussians(&g_kernel, &dg_kernel, atof(argv[2]), &k_width);
+			
+			gettimeofday(&start, NULL);
+		}
+	
+		// Broadcast height, width, k_width, kernel, dkernel
+		MPI_Bcast(&height, 1, MPI_INT, 0, MPI_COMM_WORLD);
+		MPI_Bcast(&width, 1, MPI_INT, 0, MPI_COMM_WORLD);
+		MPI_Bcast(&k_width, 1, MPI_INT, 0, MPI_COMM_WORLD);
+		MPI_Bcast(g_kernel, k_width, MPI_INT, 0, MPI_COMM_WORLD);
+		MPI_Bcast(dg_kernel, k_width, MPI_INT, 0, MPI_COMM_WORLD);
 
 		// Dispatch chunks or original to nodes
+		// NOTE: Need to add additional room for ghost rows
+		//       will handle S/R in head of each func.
+		subimage = (float*)malloc(sizeof(float)*width*(height/comm_size));
+		t_hor = (float*)malloc(sizeof(float)*width*(height/comm_size));
+		th_grad = (float*)malloc(sizeof(float)*width*(height/comm_size));
+		
 		MPI_Scatter(image, width*(height/comm_size), MPI_FLOAT, subimage, 
 				width*(height/comm_size), MPI_FLOAT, 0, MPI_COMM_WORLD);
 
-
-		printf("TEST\n");
 		// Convolve Each Subimage
-		//convolve(subimage, &t_hor, g_kernel, height/comm_size, width, k_width, 1);
-		
-		// Pass ghost rows
+		convolve(subimage, &t_hor, g_kernel, height/comm_size, width, k_width, 1);
 
 		// Convolve Each subimage
-		//convolve(t_hor, &h_grad, dg_kernel, height, width, 1, k_width);
-		
+		convolve(t_hor, &th_grad, dg_kernel, height, width, 1, k_width);
+			
 		// Gather subimages and write
+		MPI_Gather(th_grad, width*(height/comm_size), MPI_FLOAT, h_grad, 
+				width*(height/comm_size), MPI_FLOAT, 0, MPI_COMM_WORLD);
 		//write_image_template("h_grad.pgm", h_grad, width, height);
 		
-		MPI_Finalize();
+		// Added for debugging purposes. On personal machine same node handles
+		// multiple proc tasks and causes sync issues.
+		MPI_Barrier(MPI_COMM_WORLD);
 
-		printf("%ld\n", (end.tv_sec *1000000 + end.tv_usec)
-			-(start.tv_sec * 1000000 + start.tv_usec));
+		MPI_Finalize();
+		
+		if(comm_rank==0){
+			write_image_template("h_grad.pgm", h_grad, width, height);
+			printf("%ld\n", (end.tv_sec *1000000 + end.tv_usec)
+				-(start.tv_sec * 1000000 + start.tv_usec));
+		}
 	}
 }
