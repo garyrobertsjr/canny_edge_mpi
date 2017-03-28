@@ -264,7 +264,7 @@ void create_gaussians(float **g_kernel, float **dg_kernel, float sigma, int *w){
 
 int main(int argc, char **argv){
 	if(argc != 3)
-		printf("cannyedge <file> <sigma>\n");
+		printf("cannyedge_MPI <file> <sigma>\n");
 	else{
 		int height, width, k_width, comm_size, comm_rank;
 		struct timeval start, end;
@@ -308,8 +308,6 @@ int main(int argc, char **argv){
 		// NOTE: Need to add additional room for ghost rows
 		//       will handle S/R in head of each func.
 		subimage = (float*)malloc(sizeof(float)*width*(height/comm_size));
-		t_hor = (float*)malloc(sizeof(float)*width*(height/comm_size));
-		th_grad = (float*)malloc(sizeof(float)*width*(height/comm_size));
 		
 		MPI_Scatter(image, width*(height/comm_size), MPI_FLOAT, subimage, 
 				width*(height/comm_size), MPI_FLOAT, 0, MPI_COMM_WORLD);
