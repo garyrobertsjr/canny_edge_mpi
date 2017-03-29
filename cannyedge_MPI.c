@@ -203,36 +203,40 @@ void gradient_phase(float *v_grad, float *h_grad, float **mag, float **phase,
 
 void convolve(float *image, float **output, float *kernel, int height, 
 		int width, int k_height, int k_width, int comm_size, int comm_rank){
-
-	float *bot = image + width*((height/comm_size)-1);
-	int ghost_siz = width*floor(k_height/2);
 	
+	int ghost_siz = floor(k_height/2);
 	MPI_Status status;
-	
-	*output = (float*)malloc(sizeof(float)*width*(height/comm_size + 2*floor(k_height/2)));
 
+	if(comm_rank==0 || comm_rank==(comm_size-1))	
+		*output = (float*)malloc(sizeof(float)*width*(height + ghost_siz));
+	else
+		*output = (float*)malloc(sizeof(float)*width*(height + 2*ghost_siz));
+		
 	if(comm_rank==0){
-		printf("Sending from %d\n", comm_rank);
-		// send bot to top of comm_rank+1
-		MPI_Send(image+width*(height/comm_size-ghost_siz), ghost_siz, MPI_FLOAT, 
-				1, 1, MPI_COMM_WORLD);
-		// receive top of rank+1
+		printf("Top segment send/recv: %d to %d\n", comm_rank, comm_rank+1);
+		// send bottom and receive top from rank+1
+		MPI_Sendrecv(image+width*(height-ghost_siz), ghost_siz*width, MPI_FLOAT, comm_rank+1, comm_rank,
+				*output+width*height, ghost_siz*width, MPI_FLOAT, comm_rank+1, comm_rank+1, MPI_COMM_WORLD, &status);
 	}
-	else if(comm_rank==comm_size){
-		printf("Receiving from %d\n", comm_rank);
-		//receive bot of rank-1
-		MPI_Recv(image, ghost_siz, MPI_FLOAT, comm_rank-1, 0, MPI_COMM_WORLD, &status);
+	else if(comm_rank==(comm_size-1)){
+		printf("Bottom segment send/recv: %d to %d\n", comm_rank, comm_rank-1);
+		// sent top and receive bottom from rank-1
+		MPI_Sendrecv(image, ghost_siz*width, MPI_FLOAT, comm_rank-1, comm_rank,
+				*output, ghost_siz*width, MPI_FLOAT, comm_rank-1, comm_rank-1, MPI_COMM_WORLD, &status);
 	}
 	else{
-		//receive bot from rank-1
-		//receive top of rank+1
+		printf("Middle segment passing.... RANK:%d \n", comm_rank);
+		//send top and receive top from rank+1	
+		MPI_Sendrecv(image, ghost_siz*width, MPI_FLOAT, comm_rank-1, comm_rank,
+				*output, ghost_siz*width, MPI_FLOAT, comm_rank-1, comm_rank-1, MPI_COMM_WORLD, &status);
+		// send bottom and receive top from rank+1
+		MPI_Sendrecv(image+width*(height-ghost_siz), ghost_siz*width, MPI_FLOAT, comm_rank+1, comm_rank,
+				*output+width*(height+ghost_siz), ghost_siz*width, MPI_FLOAT, comm_rank+1, comm_rank+1, MPI_COMM_WORLD, &status);
 	}
+	printf("DONE\n");
+	
 
-	// Added for debugging purposes. On personal machine same node handles
-	// multiple proc tasks and causes sync issues.
-	MPI_Barrier(MPI_COMM_WORLD);
-	
-	
+	/*	
 	// Iter pixels and convolve
 	for(int i=0; i<height; i++){
 		for(int j=0; j<width; j++){
@@ -249,7 +253,7 @@ void convolve(float *image, float **output, float *kernel, int height,
 			}
 			*(*output+(i*width)+j)=sum;
 		}
-	}
+	}*/
 }
 
 void create_gaussians(float **g_kernel, float **dg_kernel, float sigma, int *w){
@@ -293,7 +297,7 @@ int main(int argc, char **argv){
 	if(argc != 3)
 		printf("cannyedge_MPI <file> <sigma>\n");
 	else{
-		int height, width, k_width, comm_size, comm_rank;
+		int height, width, k_width, k_height=1, comm_size, comm_rank;
 		struct timeval start, end;
 		float *g_kernel, *dg_kernel, *t_hor, *t_ver, *image, 
 		      *h_grad, *v_grad, *mag, *phase, *sup, *hyst, 
@@ -301,6 +305,7 @@ int main(int argc, char **argv){
 
 		MPI_Init(&argc,&argv);
 		MPI_Comm_size(MPI_COMM_WORLD, &comm_size);
+		MPI_Comm_rank(MPI_COMM_WORLD, &comm_rank);
 		
 		create_gaussians(&g_kernel, &dg_kernel, atof(argv[2]), &k_width);
 		
@@ -330,14 +335,14 @@ int main(int argc, char **argv){
 		MPI_Bcast(&k_width, 1, MPI_INT, 0, MPI_COMM_WORLD);
 		MPI_Bcast(g_kernel, k_width, MPI_FLOAT, 0, MPI_COMM_WORLD);
 		MPI_Bcast(dg_kernel, k_width, MPI_FLOAT, 0, MPI_COMM_WORLD);
-
 		// Dispatch chunks or original to nodes
 		// NOTE: Need to add additional room for ghost rows
 		//       will handle S/R in head of each func.
 		subimage = (float*)malloc(sizeof(float)*width*(height/comm_size));
 		
-		MPI_Scatter(image, width*(height/comm_size), MPI_FLOAT, subimage, 
-				width*(height/comm_size), MPI_FLOAT, 0, MPI_COMM_WORLD);
+		MPI_Scatter(image, width*(height/comm_size), MPI_FLOAT, 
+				subimage, width*(height/comm_size), 
+				MPI_FLOAT, 0, MPI_COMM_WORLD);
 
 		// Convolve Each Subimage
 		convolve(subimage, &t_hor, g_kernel, height/comm_size, width, k_width, 1,
@@ -355,11 +360,12 @@ int main(int argc, char **argv){
 		MPI_Barrier(MPI_COMM_WORLD);
 		*/
 		MPI_Finalize();
-		
+		/*	
 		if(comm_rank==0){
 			write_image_template("h_grad.pgm", h_grad, width, height);
 			printf("%ld\n", (end.tv_sec *1000000 + end.tv_usec)
 				-(start.tv_sec * 1000000 + start.tv_usec));
 		}
+		*/
 	}
 }
