@@ -6,10 +6,10 @@
 #include "mpi.h"
 #include "image_template.h"
 
-int inBounds(int x, int y, int h, int w){
+int inBounds(int x, int y, int h, int w, int tgr, int bgr){
 	if(x < 0 || x >= w)
 		return 0;
-	else if(y < 0 || y >= h)
+	else if(y < 0-tgr || y >= h +bgr)
 		return 0;
 	else
 		return 1;
@@ -18,7 +18,7 @@ int inBounds(int x, int y, int h, int w){
 int isConnected(float *hyst, int x, int y, int height, int width){
 	for(int y_offset=-3; y_offset<=3; y_offset++){
 		for(int x_offset=-3; x_offset<=3; x_offset++){
-			if(inBounds(x+x_offset, y+y_offset, height, width) &&
+			if(inBounds(x+x_offset, y+y_offset, height, width, 0, 0) &&
 				*(hyst+(y+y_offset)*width+x_offset+x)==255)
 				return 1;	
 		}
@@ -209,7 +209,6 @@ float *sr_ghost(float *image, int height, int width, int ngr, int comm_size, int
 	else
 		output = (float*)malloc(sizeof(float)*width*(height + 2*ngr));
 	if(comm_rank==0){
-		printf("Top segment send/recv: %d to %d\n", comm_rank, comm_rank+1);
 		// send bottom and receive top from rank+1
 		MPI_Sendrecv(image+width*(height-ngr), ngr*width, MPI_FLOAT, comm_rank+1, comm_rank,
 				output+width*height, ngr*width, MPI_FLOAT, comm_rank+1, comm_rank+1, MPI_COMM_WORLD, &status);
@@ -219,17 +218,14 @@ float *sr_ghost(float *image, int height, int width, int ngr, int comm_size, int
 		return output;
 	}
 	else if(comm_rank==(comm_size-1)){
-		printf("Bottom segment send/recv: %d to %d\n", comm_rank, comm_rank-1);
 		// sent top and receive bottom from rank-1
 		MPI_Sendrecv(image, ngr*width, MPI_FLOAT, comm_rank-1, comm_rank,
 				output, ngr*width, MPI_FLOAT, comm_rank-1, comm_rank-1, MPI_COMM_WORLD, &status);
 	
 		memcpy(output+ngr*width, image, sizeof(float)*width*height);
-		print_matrix(image, height/comm_size, width);	
 		return output+ngr*width;
 	}
 	else{
-		printf("Middle segment passing.... RANK:%d \n", comm_rank);
 		//send top and receive top from rank+1	
 		MPI_Sendrecv(image, ngr*width, MPI_FLOAT, comm_rank-1, comm_rank,
 				output, ngr*width, MPI_FLOAT, comm_rank-1, comm_rank-1, MPI_COMM_WORLD, &status);
@@ -239,13 +235,26 @@ float *sr_ghost(float *image, int height, int width, int ngr, int comm_size, int
 		memcpy(output+ngr*width, image, sizeof(float)*width*height);
 		return output+ngr*width;
 	}
-	printf("DONE\n");	
 }
 
 void convolve(float *image, float **output, float *kernel, int height, 
 		int width, int k_height, int k_width, int comm_size, int comm_rank){
 
 	*output = (float*)malloc(sizeof(float)*width*height);
+	int tgr,bgr;
+
+	if(comm_rank==0){
+		tgr = 0;
+		bgr = floor(k_height/2);
+	}
+	else if(comm_rank==comm_size-1){
+		tgr=floor(k_height/2);
+		bgr = 0;
+	}
+	else{
+		tgr = floor(k_height/2);
+		bgr = tgr;
+	}
 
 	// Iter pixels and convolve
 	for(int i=0; i<height; i++){
@@ -257,7 +266,7 @@ void convolve(float *image, float **output, float *kernel, int height,
 					int offseti = -1*floor(k_height/2)+k;
 					int offsetj = -1*floor(k_width/2)+m;
 					
-					if(inBounds(j+offsetj, i+offseti, height, width))
+					if(inBounds(j+offsetj, i+offseti, height, width, tgr, bgr))
 						sum+= *(image+(i+offseti)*width+j+offsetj)*(*(kernel+(k*k_width)+m));
 				}
 			}
@@ -311,7 +320,8 @@ int main(int argc, char **argv){
 		struct timeval start, end;
 		float *g_kernel, *dg_kernel, *t_hor, *t_ver, *image, 
 		      *h_grad, *v_grad, *mag, *phase, *sup, *hyst, 
-		      *subimage, *edges, *th_grad;	
+		      *subimage, *edges, *th_grad, *fh_grad, *tv_grad,
+		      *fv_grad;	
 
 		MPI_Init(&argc,&argv);
 		MPI_Comm_size(MPI_COMM_WORLD, &comm_size);
@@ -354,21 +364,36 @@ int main(int argc, char **argv){
 				subimage, width*(height/comm_size), 
 				MPI_FLOAT, 0, MPI_COMM_WORLD);
 
-		// Convolve Each Subimage
-		
+		//TODO: Refactor naming conventions for convolution
+		// HORIZONTAL GRADIENT //
 		th_grad = sr_ghost(subimage, height/comm_size, width, floor(k_width/2), comm_size, comm_rank);
 		convolve(th_grad, &t_hor, g_kernel, height/comm_size, width, k_width, 1,
 				comm_size, comm_rank);
-		//
-		// convolve(t_hor, &th_grad, dg_kernel, height, width, 1, k_width,
-		//		comm_size, comm_rank);
 		
 
-		// Aggregate subimages
-		if(comm_rank==0)
-			h_grad = (float*)malloc(sizeof(float)*width*height);
+		fh_grad = sr_ghost(th_grad, height/comm_size, width, floor(k_width/2), comm_size, comm_rank);
+		convolve(th_grad, &fh_grad, dg_kernel, height, width, 1, k_width,
+				comm_size, comm_rank);
 		
-		MPI_Gather(t_hor+width*(int)floor(k_height/2), width*(height/comm_size), MPI_FLOAT, h_grad, 
+		// VERTICAL GRADIENT //
+		tv_grad = sr_ghost(subimage, height/comm_size, width, floor(k_width/2), comm_size, comm_rank);
+		convolve(tv_grad, &t_ver, g_kernel, height/comm_size, width, 1, k_width,
+				comm_size, comm_rank);
+		
+
+		fv_grad = sr_ghost(tv_grad, height/comm_size, width, floor(k_width/2), comm_size, comm_rank);
+		convolve(tv_grad, &fv_grad, dg_kernel, height, width, k_width, 1,
+				comm_size, comm_rank);
+
+		// Aggregate subimages
+		if(comm_rank==0){
+			h_grad = (float*)malloc(sizeof(float)*width*height);
+			v_grad = (float*)malloc(sizeof(float)*width*height);
+		}
+		MPI_Gather(fh_grad, width*(height/comm_size), MPI_FLOAT, h_grad,
+				width*(height/comm_size), MPI_FLOAT, 0, MPI_COMM_WORLD);
+		
+		MPI_Gather(fv_grad, width*(height/comm_size), MPI_FLOAT, v_grad,
 				width*(height/comm_size), MPI_FLOAT, 0, MPI_COMM_WORLD);
 		
 		MPI_Finalize();
@@ -376,6 +401,7 @@ int main(int argc, char **argv){
 		if(comm_rank==0){
 			gettimeofday(&end, NULL);
 			write_image_template("h_grad.pgm", h_grad, width, height);
+			write_image_template("v_grad.pgm", v_grad, width, height);
 			printf("%ld\n", (end.tv_sec *1000000 + end.tv_usec)
 				-(start.tv_sec * 1000000 + start.tv_usec));
 		}
