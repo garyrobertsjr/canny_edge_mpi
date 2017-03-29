@@ -321,7 +321,7 @@ int main(int argc, char **argv){
 		float *g_kernel, *dg_kernel, *t_hor, *t_ver, *image, 
 		      *h_grad, *v_grad, *mag, *phase, *sup, *hyst, 
 		      *subimage, *edges, *th_grad, *fh_grad, *tv_grad,
-		      *fv_grad;	
+		      *fv_grad, *tmag, *tphase;	
 
 		MPI_Init(&argc,&argv);
 		MPI_Comm_size(MPI_COMM_WORLD, &comm_size);
@@ -385,15 +385,28 @@ int main(int argc, char **argv){
 		convolve(tv_grad, &fv_grad, dg_kernel, height, width, k_width, 1,
 				comm_size, comm_rank);
 
+		// MAGNITUDE AND PHASE //
+		tmag = (float*)malloc(sizeof(float)*(height/comm_size)*width);
+		tphase = (float*)malloc(sizeof(float)*(height/comm_size)*width);
+		gradient_phase(fv_grad, fh_grad, &tmag, &tphase, height/comm_size, width);
+
 		// Aggregate subimages
 		if(comm_rank==0){
 			h_grad = (float*)malloc(sizeof(float)*width*height);
 			v_grad = (float*)malloc(sizeof(float)*width*height);
+			mag = (float*)malloc(sizeof(float)*width*height);
+			phase = (float*)malloc(sizeof(float)*width*height);
 		}
 		MPI_Gather(fh_grad, width*(height/comm_size), MPI_FLOAT, h_grad,
 				width*(height/comm_size), MPI_FLOAT, 0, MPI_COMM_WORLD);
 		
 		MPI_Gather(fv_grad, width*(height/comm_size), MPI_FLOAT, v_grad,
+				width*(height/comm_size), MPI_FLOAT, 0, MPI_COMM_WORLD);
+				
+		MPI_Gather(tmag, width*(height/comm_size), MPI_FLOAT, mag,
+				width*(height/comm_size), MPI_FLOAT, 0, MPI_COMM_WORLD);
+		
+		MPI_Gather(tphase, width*(height/comm_size), MPI_FLOAT, phase,
 				width*(height/comm_size), MPI_FLOAT, 0, MPI_COMM_WORLD);
 		
 		MPI_Finalize();
@@ -402,6 +415,8 @@ int main(int argc, char **argv){
 			gettimeofday(&end, NULL);
 			write_image_template("h_grad.pgm", h_grad, width, height);
 			write_image_template("v_grad.pgm", v_grad, width, height);
+			write_image_template("mag.pgm", mag, width, height);
+			write_image_template("phase.pgm", phase, width, height);
 			printf("%ld\n", (end.tv_sec *1000000 + end.tv_usec)
 				-(start.tv_sec * 1000000 + start.tv_usec));
 		}
