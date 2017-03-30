@@ -143,19 +143,10 @@ void suppress(float *mag, float *phase, float **sup, int height, int width){
 	}
 }
 
-void hysteresis(float *sup, float **hyst, int height, int width){
-	float *sorted = (float*)malloc(sizeof(float)*height*width);
-	int t_high, t_low;
-	
+void hysteresis(float *sup, float **hyst, int height, int width, float t_high, float t_low){
 	*hyst = (float*)malloc(sizeof(float)*height*width);
 	memcpy(*hyst, sup, sizeof(float)*height*width);	
-	memcpy(sorted, sup, sizeof(float)*height*width);	
 	
-	qsort(sorted, height*width, sizeof(float), floatcomp);
-	t_high = *(sorted+(int)(.965*height*width));
-	t_low = t_high/5;
-	
-
 	for(int i=0; i<height; i++){
 		for(int j=0; j<width; j++){
 			if(*(sup+i*width+j)>=t_high)
@@ -166,7 +157,6 @@ void hysteresis(float *sup, float **hyst, int height, int width){
 				*(*hyst+i*width+j)=125;
 		}
 	}
-	free(sorted);
 }
 
 void find_edges(float *hyst, float **edges, int height, int width){
@@ -321,7 +311,8 @@ int main(int argc, char **argv){
 		float *g_kernel, *dg_kernel, *t_hor, *t_ver, *image, 
 		      *h_grad, *v_grad, *mag, *phase, *sup, *hyst, 
 		      *subimage, *edges, *th_grad, *fh_grad, *tv_grad,
-		      *fv_grad, *tmag, *tphase;	
+		      *fv_grad, *tmag, *tphase, *ft_sup, *t_sup, t_high,
+		       t_low, *sorted, *ft_hyst;	
 
 		MPI_Init(&argc,&argv);
 		MPI_Comm_size(MPI_COMM_WORLD, &comm_size);
@@ -336,6 +327,11 @@ int main(int argc, char **argv){
 				    	&height);
 
 			h_grad = (float*)malloc(sizeof(float)*width*height);
+			v_grad = (float*)malloc(sizeof(float)*width*height);
+			mag = (float*)malloc(sizeof(float)*width*height);
+			phase = (float*)malloc(sizeof(float)*width*height);
+			sup = (float*)malloc(sizeof(float)*width*height);
+			hyst = (float*)malloc(sizeof(float)*width*height);
 			
 			printf("Gaussian Kernel:\n");
 			print_matrix(g_kernel, 1, k_width);
@@ -375,6 +371,9 @@ int main(int argc, char **argv){
 		convolve(th_grad, &fh_grad, dg_kernel, height, width, 1, k_width,
 				comm_size, comm_rank);
 		
+		MPI_Gather(fh_grad, width*(height/comm_size), MPI_FLOAT, h_grad,
+				width*(height/comm_size), MPI_FLOAT, 0, MPI_COMM_WORLD);
+		
 		// VERTICAL GRADIENT //
 		tv_grad = sr_ghost(subimage, height/comm_size, width, floor(k_width/2), comm_size, comm_rank);
 		convolve(tv_grad, &t_ver, g_kernel, height/comm_size, width, 1, k_width,
@@ -385,28 +384,49 @@ int main(int argc, char **argv){
 		convolve(tv_grad, &fv_grad, dg_kernel, height, width, k_width, 1,
 				comm_size, comm_rank);
 
+		MPI_Gather(fv_grad, width*(height/comm_size), MPI_FLOAT, v_grad,
+				width*(height/comm_size), MPI_FLOAT, 0, MPI_COMM_WORLD);
+		
 		// MAGNITUDE AND PHASE //
 		tmag = (float*)malloc(sizeof(float)*(height/comm_size)*width);
 		tphase = (float*)malloc(sizeof(float)*(height/comm_size)*width);
 		gradient_phase(fv_grad, fh_grad, &tmag, &tphase, height/comm_size, width);
-
-		// Aggregate subimages
-		if(comm_rank==0){
-			h_grad = (float*)malloc(sizeof(float)*width*height);
-			v_grad = (float*)malloc(sizeof(float)*width*height);
-			mag = (float*)malloc(sizeof(float)*width*height);
-			phase = (float*)malloc(sizeof(float)*width*height);
-		}
-		MPI_Gather(fh_grad, width*(height/comm_size), MPI_FLOAT, h_grad,
-				width*(height/comm_size), MPI_FLOAT, 0, MPI_COMM_WORLD);
 		
-		MPI_Gather(fv_grad, width*(height/comm_size), MPI_FLOAT, v_grad,
-				width*(height/comm_size), MPI_FLOAT, 0, MPI_COMM_WORLD);
-				
 		MPI_Gather(tmag, width*(height/comm_size), MPI_FLOAT, mag,
 				width*(height/comm_size), MPI_FLOAT, 0, MPI_COMM_WORLD);
-		
+
 		MPI_Gather(tphase, width*(height/comm_size), MPI_FLOAT, phase,
+				width*(height/comm_size), MPI_FLOAT, 0, MPI_COMM_WORLD);
+		
+		// SUPPRESS //
+		ft_sup = (float*)malloc(sizeof(float)*width*(height/comm_size));
+		t_sup = sr_ghost(tphase, height/comm_size, width, 1, comm_size, comm_rank);
+		suppress(tmag, t_sup, &ft_sup, height/comm_size, width);	
+	
+		MPI_Gather(ft_sup, width*(height/comm_size), MPI_FLOAT, sup,
+				width*(height/comm_size), MPI_FLOAT, 0, MPI_COMM_WORLD);
+		
+		// HYST //
+		
+		// Calc thresholds on node 0
+		if(comm_rank==0){
+			sorted = (float*)malloc(sizeof(float)*height*width);
+			memcpy(sorted, sup, sizeof(float)*height*width);
+			qsort(sorted, height*width, sizeof(float), floatcomp);
+
+			t_high = *(sorted+(int)(.9*height*width));
+			t_low = t_high/5;
+			
+			free(sorted);
+		}
+		
+		// Updates thresholds for all nodes
+		MPI_Bcast(&t_high, 1, MPI_FLOAT, 0, MPI_COMM_WORLD);
+		MPI_Bcast(&t_low, 1, MPI_FLOAT, 0, MPI_COMM_WORLD);
+		
+		hysteresis(ft_sup, &ft_hyst, height/comm_size, width, t_high, t_low);
+
+		MPI_Gather(ft_hyst, width*(height/comm_size), MPI_FLOAT, hyst,
 				width*(height/comm_size), MPI_FLOAT, 0, MPI_COMM_WORLD);
 		
 		MPI_Finalize();
@@ -417,6 +437,8 @@ int main(int argc, char **argv){
 			write_image_template("v_grad.pgm", v_grad, width, height);
 			write_image_template("mag.pgm", mag, width, height);
 			write_image_template("phase.pgm", phase, width, height);
+			write_image_template("suppress.pgm", sup, width, height);
+			write_image_template("hysteresis.pgm", hyst, width, height);
 			printf("%ld\n", (end.tv_sec *1000000 + end.tv_usec)
 				-(start.tv_sec * 1000000 + start.tv_usec));
 		}
