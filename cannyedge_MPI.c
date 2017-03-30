@@ -7,20 +7,35 @@
 #include "image_template.h"
 
 int inBounds(int x, int y, int h, int w, int tgr, int bgr){
-	if(x < 0 || x >= w)
+	if(x < 0 || x > w)
 		return 0;
-	else if(y < 0-tgr || y >= h +bgr)
+	else if(y < 0-tgr || y > h +bgr)
 		return 0;
 	else
 		return 1;
 }
 
-int isConnected(float *hyst, int x, int y, int height, int width){
-	for(int y_offset=-3; y_offset<=3; y_offset++){
-		for(int x_offset=-3; x_offset<=3; x_offset++){
-			if(inBounds(x+x_offset, y+y_offset, height, width, 0, 0) &&
+int isConnected(float *hyst, int x, int y, int height, int width, int comm_rank, int comm_size){
+	int tgr, bgr;
+	
+	if(comm_rank==0){
+		tgr=0;
+		bgr=1;
+	}
+	else if(comm_rank==comm_size-1){
+		tgr=1;
+		bgr=0;
+	}
+	else{
+		tgr=1;
+		bgr=1;
+	}
+
+	for(int y_offset=-1; y_offset<=1; y_offset++){
+		for(int x_offset=-1; x_offset<=1; x_offset++){
+			if(inBounds(x+x_offset, y+y_offset, height, width, tgr, bgr) &&
 				*(hyst+(y+y_offset)*width+x_offset+x)==255)
-				return 1;	
+				return 1;
 		}
 	}
 	return 0;
@@ -159,12 +174,12 @@ void hysteresis(float *sup, float **hyst, int height, int width, float t_high, f
 	}
 }
 
-void find_edges(float *hyst, float **edges, int height, int width){
+void find_edges(float *hyst, float **edges, int height, int width, int comm_rank, int comm_size){
 	*edges = (float*)malloc(sizeof(float)*height*width);
 	memcpy(*edges, hyst, sizeof(float)*height*width);	
 	for(int i=0; i<height; i++){
 		for(int j=0; j<width; j++){
-			if(isConnected(hyst,j,i,height, width))
+			if(isConnected(hyst,j,i,height, width, comm_rank, comm_size))
 				*(*edges+i*width+j)=255;
 			else
 				*(*edges+i*width+j)=0;
@@ -201,7 +216,8 @@ float *sr_ghost(float *image, int height, int width, int ngr, int comm_size, int
 	if(comm_rank==0){
 		// send bottom and receive top from rank+1
 		MPI_Sendrecv(image+width*(height-ngr), ngr*width, MPI_FLOAT, comm_rank+1, comm_rank,
-				output+width*height, ngr*width, MPI_FLOAT, comm_rank+1, comm_rank+1, MPI_COMM_WORLD, &status);
+				output+width*height, ngr*width, MPI_FLOAT, comm_rank+1, comm_rank+1, 
+				MPI_COMM_WORLD, &status);
 	
 		memcpy(output, image, sizeof(float)*width*height);
 
@@ -210,7 +226,8 @@ float *sr_ghost(float *image, int height, int width, int ngr, int comm_size, int
 	else if(comm_rank==(comm_size-1)){
 		// sent top and receive bottom from rank-1
 		MPI_Sendrecv(image, ngr*width, MPI_FLOAT, comm_rank-1, comm_rank,
-				output, ngr*width, MPI_FLOAT, comm_rank-1, comm_rank-1, MPI_COMM_WORLD, &status);
+				output, ngr*width, MPI_FLOAT, comm_rank-1, comm_rank-1, MPI_COMM_WORLD, 
+				&status);
 	
 		memcpy(output+ngr*width, image, sizeof(float)*width*height);
 		return output+ngr*width;
@@ -218,10 +235,13 @@ float *sr_ghost(float *image, int height, int width, int ngr, int comm_size, int
 	else{
 		//send top and receive top from rank+1	
 		MPI_Sendrecv(image, ngr*width, MPI_FLOAT, comm_rank-1, comm_rank,
-				output, ngr*width, MPI_FLOAT, comm_rank-1, comm_rank-1, MPI_COMM_WORLD, &status);
+				output, ngr*width, MPI_FLOAT, comm_rank-1, comm_rank-1, MPI_COMM_WORLD, 
+				&status);
 		// send bottom and receive top from rank+1
 		MPI_Sendrecv(image+width*(height-ngr), ngr*width, MPI_FLOAT, comm_rank+1, comm_rank,
-				output+width*(height+ngr), ngr*width, MPI_FLOAT, comm_rank+1, comm_rank+1, MPI_COMM_WORLD, &status);
+				output+width*(height+ngr), ngr*width, MPI_FLOAT, comm_rank+1, comm_rank+1, 
+				MPI_COMM_WORLD, &status);
+		
 		memcpy(output+ngr*width, image, sizeof(float)*width*height);
 		return output+ngr*width;
 	}
@@ -245,7 +265,6 @@ void convolve(float *image, float **output, float *kernel, int height,
 		tgr = floor(k_height/2);
 		bgr = tgr;
 	}
-
 	// Iter pixels and convolve
 	for(int i=0; i<height; i++){
 		for(int j=0; j<width; j++){
@@ -256,8 +275,9 @@ void convolve(float *image, float **output, float *kernel, int height,
 					int offseti = -1*floor(k_height/2)+k;
 					int offsetj = -1*floor(k_width/2)+m;
 					
-					if(inBounds(j+offsetj, i+offseti, height, width, tgr, bgr))
+					if(inBounds(j+offsetj, i+offseti, height, width, tgr, bgr)){
 						sum+= *(image+(i+offseti)*width+j+offsetj)*(*(kernel+(k*k_width)+m));
+					}
 				}
 			}
 			*(*output+(i*width)+j)=sum;
@@ -312,7 +332,7 @@ int main(int argc, char **argv){
 		      *h_grad, *v_grad, *mag, *phase, *sup, *hyst, 
 		      *subimage, *edges, *th_grad, *fh_grad, *tv_grad,
 		      *fv_grad, *tmag, *tphase, *ft_sup, *t_sup, t_high,
-		       t_low, *sorted, *ft_hyst;	
+		       t_low, *sorted, *ft_hyst, *t_edges, *ft_edges, *test;	
 
 		MPI_Init(&argc,&argv);
 		MPI_Comm_size(MPI_COMM_WORLD, &comm_size);
@@ -332,25 +352,21 @@ int main(int argc, char **argv){
 			phase = (float*)malloc(sizeof(float)*width*height);
 			sup = (float*)malloc(sizeof(float)*width*height);
 			hyst = (float*)malloc(sizeof(float)*width*height);
+			edges = (float*)malloc(sizeof(float)*width*height);
 			
 			printf("Gaussian Kernel:\n");
 			print_matrix(g_kernel, 1, k_width);
 			printf("Derivative Kernel:\n");
 			print_matrix(dg_kernel,1,k_width);
+			printf("Kernel: Width %d\n", k_width);
 		
 			printf("Processing %s using %d nodes...\n", argv[1], comm_size);
-
-			create_gaussians(&g_kernel, &dg_kernel, atof(argv[2]), &k_width);
-			
 			gettimeofday(&start, NULL);
 		}
 	
 		// Broadcast height, width, k_width, kernel, dkernel
 		MPI_Bcast(&height, 1, MPI_INT, 0, MPI_COMM_WORLD);
 		MPI_Bcast(&width, 1, MPI_INT, 0, MPI_COMM_WORLD);
-		MPI_Bcast(&k_width, 1, MPI_INT, 0, MPI_COMM_WORLD);
-		MPI_Bcast(g_kernel, k_width, MPI_FLOAT, 0, MPI_COMM_WORLD);
-		MPI_Bcast(dg_kernel, k_width, MPI_FLOAT, 0, MPI_COMM_WORLD);
 		// Dispatch chunks or original to nodes
 		// NOTE: Need to add additional room for ghost rows
 		//       will handle S/R in head of each func.
@@ -429,16 +445,26 @@ int main(int argc, char **argv){
 		MPI_Gather(ft_hyst, width*(height/comm_size), MPI_FLOAT, hyst,
 				width*(height/comm_size), MPI_FLOAT, 0, MPI_COMM_WORLD);
 		
+	
+		// EDGES //
+
+		t_edges = sr_ghost(ft_hyst, height/comm_size, width, 1, comm_size, comm_rank);
+		find_edges(t_edges, &ft_edges, height/comm_size, width, comm_size, comm_rank);	
+	
+		MPI_Gather(ft_edges, width*(height/comm_size), MPI_FLOAT, edges,
+				width*(height/comm_size), MPI_FLOAT, 0, MPI_COMM_WORLD);
+		
 		MPI_Finalize();
 			
 		if(comm_rank==0){
 			gettimeofday(&end, NULL);
-			write_image_template("h_grad.pgm", h_grad, width, height);
-			write_image_template("v_grad.pgm", v_grad, width, height);
-			write_image_template("mag.pgm", mag, width, height);
-			write_image_template("phase.pgm", phase, width, height);
-			write_image_template("suppress.pgm", sup, width, height);
-			write_image_template("hysteresis.pgm", hyst, width, height);
+			write_image_template("h_grad_MPI.pgm", h_grad, width, height);
+			write_image_template("v_grad_MPI.pgm", v_grad, width, height);
+			write_image_template("mag_MPI.pgm", mag, width, height);
+			write_image_template("phase_MPI.pgm", phase, width, height);
+			write_image_template("suppress_MPI.pgm", sup, width, height);
+			write_image_template("hysteresis_MPI.pgm", hyst, width, height);
+			write_image_template("edges_MPI.pgm",edges, width, height);
 			printf("%ld\n", (end.tv_sec *1000000 + end.tv_usec)
 				-(start.tv_sec * 1000000 + start.tv_usec));
 		}

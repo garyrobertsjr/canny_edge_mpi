@@ -5,18 +5,20 @@
 #include "sys/time.h"
 #include "image_template.h"
 
-int inBounds(int x, int y, int h, int w){
-	if(x < 0 || x >= w)
+int inBounds(int y, int x, int h, int w){
+	if(x < 0 || x > w){
 		return 0;
-	else if(y < 0 || y >= h)
+	}
+	else if(y < 0 || y > h){
 		return 0;
+	}
 	else
 		return 1;
 }
 
 int isConnected(float *hyst, int x, int y, int height, int width){
-	for(int y_offset=-3; y_offset<=3; y_offset++){
-		for(int x_offset=-3; x_offset<=3; x_offset++){
+	for(int y_offset=-1; y_offset<=1; y_offset++){
+		for(int x_offset=-1; x_offset<=1; x_offset++){
 			if(inBounds(x+x_offset, y+y_offset, height, width) &&
 				*(hyst+(y+y_offset)*width+x_offset+x)==255)
 				return 1;	
@@ -119,23 +121,23 @@ void suppress(float *mag, float *phase, float **sup, int height, int width){
 			theta*=(180/M_PI);			
 
 			if(theta<=22.5 || theta >157.5){
-				if(left(*sup,j,i,width) > *(mag+i*width+j)
-				   	|| right(*sup,j,i,width) > *(mag+i*width+j))
+				if(left(mag,j,i,width) > *(mag+i*width+j)
+				   	|| right(mag,j,i,width) > *(mag+i*width+j))
 					*(*sup+i*width+j)=0; 
 			}
 			else if(theta>22.5 && theta<=67.5){
-				if(topLeft(*sup,j,i,width,height) > *(mag+i*width+j)
-					|| bottomRight(*sup,j,i,width,height) > *(mag+i*width+j))
+				if(topLeft(mag,j,i,width,height) > *(mag+i*width+j)
+					|| bottomRight(mag,j,i,width,height) > *(mag+i*width+j))
 					*(*sup+i*width+j)=0; 
 			}
 			else if(theta>67.5 && theta<=112.5){
-				if(top(*sup,j,i,height,width) > *(mag+i*width+j) 
-					|| bottom(*sup,j,i,height,width) > *(mag+i*width+j))
+				if(top(mag,j,i,height,width) > *(mag+i*width+j) 
+					|| bottom(mag,j,i,height,width) > *(mag+i*width+j))
 					*(*sup+i*width+j)=0; 
 			}
 			else if(theta>112.5 && theta<=157.5){
 				if(topRight(mag,j,i,height,width) > *(mag+i*width+j) 
-					|| bottomLeft(*sup,i,j,height,width) > *(mag+i*width+j))
+					|| bottomLeft(mag,i,j,height,width) > *(mag+i*width+j))
 					*(*sup+i*width+j)=0; 
 			}
 		}
@@ -144,7 +146,7 @@ void suppress(float *mag, float *phase, float **sup, int height, int width){
 
 void hysteresis(float *sup, float **hyst, int height, int width){
 	float *sorted = (float*)malloc(sizeof(float)*height*width);
-	int t_high, t_low;
+	float t_high, t_low;
 	
 	*hyst = (float*)malloc(sizeof(float)*height*width);
 	memcpy(*hyst, sup, sizeof(float)*height*width);	
@@ -204,7 +206,6 @@ void convolve(float *image, float **output, float *kernel, int height,
 		int width, int k_height, int k_width){
 	
 	*output = (float*)malloc(sizeof(float)*height*width);
-	
 	// Iter pixels
 	for(int i=0; i<height; i++){
 		for(int j=0; j<width; j++){
@@ -215,8 +216,9 @@ void convolve(float *image, float **output, float *kernel, int height,
 					int offseti = -1*floor(k_height/2)+k;
 					int offsetj = -1*floor(k_width/2)+m;
 					
-					if(inBounds(j+offsetj, i+offseti, height, width))
+					if(inBounds(j+offsetj, i+offseti, height, width)){
 						sum+= *(image+(i+offseti)*width+j+offsetj)*(*(kernel+(k*k_width)+m));
+					}
 				}
 			}
 			*(*output+(i*width)+j)=sum;
@@ -282,6 +284,7 @@ int main(int argc, char **argv){
 		printf("Derivative Kernel:\n");
 		print_matrix(dg_kernel,1,k_width);
 
+		printf("Kernel width: %d\n", k_width);	
 		gettimeofday(&start, NULL);
 		// Horizonal gradient
 		convolve(image, &t_hor, g_kernel, height, width, k_width, 1);
@@ -296,7 +299,9 @@ int main(int argc, char **argv){
 		hysteresis(sup, &hyst, height, width);
 		find_edges(hyst, &edges, height, width);
 		gettimeofday(&end, NULL);
-
+		
+		write_image_template("h_grad.pgm", h_grad, width, height);
+		write_image_template("v_grad.pgm", v_grad, width, height);
 		write_image_template("mag.pgm", mag, width, height);
 		write_image_template("phase.pgm", phase, width, height);
 		write_image_template("suppress.pgm", sup, width, height);
