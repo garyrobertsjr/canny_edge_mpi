@@ -74,55 +74,68 @@ float right(float *arr, int x, int y, int width){
 }
 
 // returns null if OOB, else value
-float top(float *arr, int x, int y, int height, int width){
-	if(y-1>=-1){
+float top(float *arr, int x, int y, int height, int width, int ngr){
+	if(y-1>=0-ngr){
 		return *(arr+(y-1)*width+x);
 	}
 	return (float)NULL;
 }
 
 // returns null if OOB, else value
-float bottom(float *arr, int x, int y, int height, int width){
-	if(y+1<=height){
+float bottom(float *arr, int x, int y, int height, int width, int ngr){
+	if(y+1<height+ngr){
 		return *(arr+(y+1)*width+x);
 	}
 	return (float)NULL;
 }
 
 // returns null if OOB, else value
-float topLeft(float *arr, int x, int y, int height, int width){
-	if(x-1>=0 && y-1>=-1){
+float topLeft(float *arr, int x, int y, int height, int width, int ngr){
+	if(x-1>0 && y-1>=0-ngr){
 		return *(arr+(y-1)*width+(x-1));
 	}
 	return (float)NULL;
 }
 
 // returns null if OOB, else value
-float bottomRight(float *arr, int x, int y, int height, int width){
-	if(x+1<width && y+1<=height){
+float bottomRight(float *arr, int x, int y, int height, int width, int ngr){
+	if(x+1<width && y+1<height+ngr){
 		return *(arr+(y+1)*width+(x+1));
 	}
 	return (float)NULL;
 }
 
 // returns null if OOB, else value
-float topRight(float *arr, int x, int y, int height, int width){
-	if(x+1<width && y-1>=-1){
+float topRight(float *arr, int x, int y, int height, int width, int ngr){
+	if(x+1<width && y-1>=0-ngr){
 		return *(arr+(y-1)*width+(x+1));
 	}
 	return (float)NULL;
 }
 
 // returns null if OOB, else value
-float bottomLeft(float *arr, int x, int y, int height, int width){
-	if(x-1>=0 && y+1<=height){
+float bottomLeft(float *arr, int x, int y, int height, int width, int ngr){
+	if(x-1>=0 && y+1<height+ngr){
 		return *(arr+(y+1)*width+(x-1));
 	}
 	return (float)NULL;
 }
 
-void suppress(float *mag, float *phase, float **sup, int height, int width){
+void suppress(float *mag, float *phase, float **sup, int height, int width, int comm_rank, int comm_size){
 	memcpy(*sup, mag, sizeof(float)*height*width);	
+	
+	int tgr, bgr;
+	if(comm_rank==0){
+		tgr=0; bgr=1;
+	}
+	else if(comm_rank==comm_size-1){
+		tgr=1; bgr=0;
+	}
+	else{
+		tgr=1;
+		bgr=1;
+	}
+
 	for(int i=0; i<height; i++){
 		for(int j=0; j<width; j++){
 			float theta = *(phase+i*width+j);
@@ -137,18 +150,18 @@ void suppress(float *mag, float *phase, float **sup, int height, int width){
 					*(*sup+i*width+j)=0; 
 			}
 			else if(theta>22.5 && theta<=67.5){
-				if(topLeft(mag,j,i,width,height) > *(mag+i*width+j)
-					|| bottomRight(mag,j,i,height,width) > *(mag+i*width+j))
+				if(topLeft(mag,j,i,width,height, tgr) > *(mag+i*width+j)
+					|| bottomRight(mag,j,i,height,width,bgr) > *(mag+i*width+j))
 					*(*sup+i*width+j)=0; 
 			}
 			else if(theta>67.5 && theta<=112.5){
-				if(top(mag,j,i,height,width) > *(mag+i*width+j) 
-					|| bottom(mag,j,i,height,width) > *(mag+i*width+j))
+				if(top(mag,j,i,height,width,tgr) > *(mag+i*width+j) 
+					|| bottom(mag,j,i,height,width,bgr) > *(mag+i*width+j))
 					*(*sup+i*width+j)=0; 
 			}
 			else if(theta>112.5 && theta<=157.5){
-				if(topRight(mag,j,i,height,width) > *(mag+i*width+j) 
-					|| bottomLeft(mag,j,i,height,width) > *(mag+i*width+j))
+				if(topRight(mag,j,i,height,width,tgr) > *(mag+i*width+j) 
+					|| bottomLeft(mag,j,i,height,width,bgr) > *(mag+i*width+j))
 					*(*sup+i*width+j)=0; 
 			}
 		}
@@ -329,7 +342,7 @@ int main(int argc, char **argv){
 		      *h_grad, *v_grad, *mag, *phase, *sup, *hyst, 
 		      *subimage, *edges, *th_grad, *fh_grad, *tv_grad,
 		      *fv_grad, *tmag, *tphase, *ft_sup, *t_sup, t_high,
-		       t_low, *sorted, *ft_hyst, *t_edges, *ft_edges, *test;	
+		       t_low, *sorted, *ft_hyst, *t_edges, *ft_edges, *th_grad_gr;	
 
 		MPI_Init(&argc,&argv);
 		MPI_Comm_size(MPI_COMM_WORLD, &comm_size);
@@ -380,19 +393,20 @@ int main(int argc, char **argv){
 				comm_size, comm_rank);
 		
 
-		fh_grad = sr_ghost(th_grad, height/comm_size, width, 0, comm_size, comm_rank);
-		convolve(t_hor, &fh_grad, dg_kernel, height, width, 1, k_width,
+		th_grad_gr = sr_ghost(t_hor, height/comm_size, width, 0, comm_size, comm_rank);
+		fh_grad = (float*)malloc(sizeof(float)*width*(height/comm_size));
+		convolve(th_grad_gr, &fh_grad, dg_kernel, height/comm_size, width, 1, k_width,
 				comm_size, comm_rank);
 		
 		MPI_Gather(fh_grad, width*(height/comm_size), MPI_FLOAT, h_grad,
 				width*(height/comm_size), MPI_FLOAT, 0, MPI_COMM_WORLD);
-		
+
 		// VERTICAL GRADIENT //
 		tv_grad = sr_ghost(subimage, height/comm_size, width, 0, comm_size, comm_rank);
 		convolve(tv_grad, &t_ver, g_kernel, height/comm_size, width, 1, k_width,
 				comm_size, comm_rank);
 		
-
+		fv_grad = (float*) malloc(sizeof(float)*width*(height/comm_size));
 		t_ver = sr_ghost(t_ver, height/comm_size, width, floor(k_width/2), comm_size, comm_rank);
 		convolve(t_ver, &fv_grad, dg_kernel, height, width, k_width, 1,
 				comm_size, comm_rank);
@@ -414,7 +428,7 @@ int main(int argc, char **argv){
 		// SUPPRESS //
 		ft_sup = (float*)malloc(sizeof(float)*width*(height/comm_size));
 		t_sup = sr_ghost(tmag, height/comm_size, width, 1, comm_size, comm_rank);
-		suppress(t_sup, tphase, &ft_sup, height/comm_size, width);	
+		suppress(t_sup, tphase, &ft_sup, height/comm_size, width, comm_rank, comm_size);	
 	
 		MPI_Gather(ft_sup, width*(height/comm_size), MPI_FLOAT, sup,
 				width*(height/comm_size), MPI_FLOAT, 0, MPI_COMM_WORLD);
