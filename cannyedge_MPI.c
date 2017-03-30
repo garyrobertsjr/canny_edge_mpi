@@ -9,7 +9,7 @@
 int inBounds(int x, int y, int h, int w, int tgr, int bgr){
 	if(x < 0 || x > w)
 		return 0;
-	else if(y < 0-tgr || y > h +bgr)
+	else if(y < 0-tgr || y > h+bgr)
 		return 0;
 	else
 		return 1;
@@ -75,7 +75,7 @@ float right(float *arr, int x, int y, int width){
 
 // returns null if OOB, else value
 float top(float *arr, int x, int y, int height, int width){
-	if(y-1>=0){
+	if(y-1>=-1){
 		return *(arr+(y-1)*width+x);
 	}
 	return (float)NULL;
@@ -83,7 +83,7 @@ float top(float *arr, int x, int y, int height, int width){
 
 // returns null if OOB, else value
 float bottom(float *arr, int x, int y, int height, int width){
-	if(y+1<height){
+	if(y+1<=height){
 		return *(arr+(y+1)*width+x);
 	}
 	return (float)NULL;
@@ -91,7 +91,7 @@ float bottom(float *arr, int x, int y, int height, int width){
 
 // returns null if OOB, else value
 float topLeft(float *arr, int x, int y, int height, int width){
-	if(x-1>=0 && y-1>=0){
+	if(x-1>=0 && y-1>=-1){
 		return *(arr+(y-1)*width+(x-1));
 	}
 	return (float)NULL;
@@ -99,7 +99,7 @@ float topLeft(float *arr, int x, int y, int height, int width){
 
 // returns null if OOB, else value
 float bottomRight(float *arr, int x, int y, int height, int width){
-	if(x+1<width && y+1<height){
+	if(x+1<width && y+1<=height){
 		return *(arr+(y+1)*width+(x+1));
 	}
 	return (float)NULL;
@@ -107,7 +107,7 @@ float bottomRight(float *arr, int x, int y, int height, int width){
 
 // returns null if OOB, else value
 float topRight(float *arr, int x, int y, int height, int width){
-	if(x+1<width && y-1>=0){
+	if(x+1<width && y-1>=-1){
 		return *(arr+(y-1)*width+(x+1));
 	}
 	return (float)NULL;
@@ -115,20 +115,17 @@ float topRight(float *arr, int x, int y, int height, int width){
 
 // returns null if OOB, else value
 float bottomLeft(float *arr, int x, int y, int height, int width){
-	if(x-1<=0 && y+1<height){
+	if(x-1>=0 && y+1<=height){
 		return *(arr+(y+1)*width+(x-1));
 	}
 	return (float)NULL;
 }
 
 void suppress(float *mag, float *phase, float **sup, int height, int width){
-	*sup = (float*)malloc(sizeof(float)*height*width);
 	memcpy(*sup, mag, sizeof(float)*height*width);	
-	
 	for(int i=0; i<height; i++){
 		for(int j=0; j<width; j++){
 			float theta = *(phase+i*width+j);
-			
 			if(theta<0)
 				theta+=M_PI;
 			
@@ -141,7 +138,7 @@ void suppress(float *mag, float *phase, float **sup, int height, int width){
 			}
 			else if(theta>22.5 && theta<=67.5){
 				if(topLeft(mag,j,i,width,height) > *(mag+i*width+j)
-					|| bottomRight(mag,j,i,width,height) > *(mag+i*width+j))
+					|| bottomRight(mag,j,i,height,width) > *(mag+i*width+j))
 					*(*sup+i*width+j)=0; 
 			}
 			else if(theta>67.5 && theta<=112.5){
@@ -151,7 +148,7 @@ void suppress(float *mag, float *phase, float **sup, int height, int width){
 			}
 			else if(theta>112.5 && theta<=157.5){
 				if(topRight(mag,j,i,height,width) > *(mag+i*width+j) 
-					|| bottomLeft(mag,i,j,height,width) > *(mag+i*width+j))
+					|| bottomLeft(mag,j,i,height,width) > *(mag+i*width+j))
 					*(*sup+i*width+j)=0; 
 			}
 		}
@@ -383,21 +380,21 @@ int main(int argc, char **argv){
 				comm_size, comm_rank);
 		
 
-		fh_grad = sr_ghost(th_grad, height/comm_size, width, floor(k_width/2), comm_size, comm_rank);
-		convolve(th_grad, &fh_grad, dg_kernel, height, width, 1, k_width,
+		fh_grad = sr_ghost(th_grad, height/comm_size, width, 0, comm_size, comm_rank);
+		convolve(t_hor, &fh_grad, dg_kernel, height, width, 1, k_width,
 				comm_size, comm_rank);
 		
 		MPI_Gather(fh_grad, width*(height/comm_size), MPI_FLOAT, h_grad,
 				width*(height/comm_size), MPI_FLOAT, 0, MPI_COMM_WORLD);
 		
 		// VERTICAL GRADIENT //
-		tv_grad = sr_ghost(subimage, height/comm_size, width, floor(k_width/2), comm_size, comm_rank);
+		tv_grad = sr_ghost(subimage, height/comm_size, width, 0, comm_size, comm_rank);
 		convolve(tv_grad, &t_ver, g_kernel, height/comm_size, width, 1, k_width,
 				comm_size, comm_rank);
 		
 
-		fv_grad = sr_ghost(tv_grad, height/comm_size, width, floor(k_width/2), comm_size, comm_rank);
-		convolve(tv_grad, &fv_grad, dg_kernel, height, width, k_width, 1,
+		t_ver = sr_ghost(t_ver, height/comm_size, width, floor(k_width/2), comm_size, comm_rank);
+		convolve(t_ver, &fv_grad, dg_kernel, height, width, k_width, 1,
 				comm_size, comm_rank);
 
 		MPI_Gather(fv_grad, width*(height/comm_size), MPI_FLOAT, v_grad,
@@ -416,12 +413,12 @@ int main(int argc, char **argv){
 		
 		// SUPPRESS //
 		ft_sup = (float*)malloc(sizeof(float)*width*(height/comm_size));
-		t_sup = sr_ghost(tphase, height/comm_size, width, 1, comm_size, comm_rank);
-		suppress(tmag, t_sup, &ft_sup, height/comm_size, width);	
+		t_sup = sr_ghost(tmag, height/comm_size, width, 1, comm_size, comm_rank);
+		suppress(t_sup, tphase, &ft_sup, height/comm_size, width);	
 	
 		MPI_Gather(ft_sup, width*(height/comm_size), MPI_FLOAT, sup,
 				width*(height/comm_size), MPI_FLOAT, 0, MPI_COMM_WORLD);
-		
+	
 		// HYST //
 		
 		// Calc thresholds on node 0
