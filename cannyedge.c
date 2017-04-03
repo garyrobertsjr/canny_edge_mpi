@@ -6,10 +6,10 @@
 #include "image_template.h"
 
 int inBounds(int y, int x, int h, int w){
-	if(x < 0 || x > w){
+	if(x < 0 || x >= w){
 		return 0;
 	}
-	else if(y < 0 || y > h){
+	else if(y < 0 || y >= h){
 		return 0;
 	}
 	else
@@ -110,7 +110,7 @@ float bottomLeft(float *arr, int x, int y, int height, int width){
 void suppress(float *mag, float *phase, float **sup, int height, int width){
 	*sup = (float*)malloc(sizeof(float)*height*width);
 	memcpy(*sup, mag, sizeof(float)*height*width);	
-	
+	int count =0;
 	for(int i=0; i<height; i++){
 		for(int j=0; j<width; j++){
 			float theta = *(phase+i*width+j);
@@ -121,26 +121,35 @@ void suppress(float *mag, float *phase, float **sup, int height, int width){
 
 			if(theta<=22.5 || theta >157.5){
 				if(left(mag,j,i,width) > *(mag+i*width+j)
-				   	|| right(mag,j,i,width) > *(mag+i*width+j))
+				   	|| right(mag,j,i,width) > *(mag+i*width+j)){
 					*(*sup+i*width+j)=0; 
+					count+=1;
+				}
 			}
 			else if(theta>22.5 && theta<=67.5){
 				if(topLeft(mag,j,i,width,height) > *(mag+i*width+j)
-					|| bottomRight(mag,j,i,height, width) > *(mag+i*width+j))
+					|| bottomRight(mag,j,i,height, width) > *(mag+i*width+j)){
 					*(*sup+i*width+j)=0; 
+					count+=1;
+				}
 			}
 			else if(theta>67.5 && theta<=112.5){
 				if(top(mag,j,i,height,width) > *(mag+i*width+j) 
-					|| bottom(mag,j,i,height,width) > *(mag+i*width+j))
+					|| bottom(mag,j,i,height,width) > *(mag+i*width+j)){
 					*(*sup+i*width+j)=0; 
+					count+=1;
+				}
 			}
 			else if(theta>112.5 && theta<=157.5){
 				if(topRight(mag,j,i,height,width) > *(mag+i*width+j) 
-					|| bottomLeft(mag,j,i,height,width) > *(mag+i*width+j))
+					|| bottomLeft(mag,j,i,height,width) > *(mag+i*width+j)){
 					*(*sup+i*width+j)=0; 
+					count+=1;
+					}
 			}
 		}
 	}
+	printf("COUNT %d\n", count);
 }
 
 void hysteresis(float *sup, float **hyst, int height, int width){
@@ -152,7 +161,7 @@ void hysteresis(float *sup, float **hyst, int height, int width){
 	memcpy(sorted, sup, sizeof(float)*height*width);	
 	
 	qsort(sorted, height*width, sizeof(float), floatcomp);
-	t_high = *(sorted+(int)(.9*height*width));
+	t_high = *(sorted+(int)(.95*height*width));
 	t_low = t_high/5;
 	
 

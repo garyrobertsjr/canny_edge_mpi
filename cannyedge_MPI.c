@@ -15,32 +15,6 @@ int inBounds(int x, int y, int h, int w, int tgr, int bgr){
 		return 1;
 }
 
-int isConnected(float *hyst, int x, int y, int height, int width, int comm_rank, int comm_size){
-	int tgr, bgr;
-	
-	if(comm_rank==0){
-		tgr=0;
-		bgr=1;
-	}
-	else if(comm_rank==comm_size-1){
-		tgr=1;
-		bgr=0;
-	}
-	else{
-		tgr=1;
-		bgr=1;
-	}
-
-	for(int y_offset=-1; y_offset<=1; y_offset++){
-		for(int x_offset=-1; x_offset<=1; x_offset++){
-			if(inBounds(x+x_offset, y+y_offset, height, width, tgr, bgr) &&
-				*(hyst+(y+y_offset)*width+x_offset+x)==255)
-				return 1;
-		}
-	}
-	return 0;
-}
-
 void print_matrix(float *matrix, int height, int width){
 	for(int i=0; i<height; i++){
 		for(int j=0; j<width; j++){
@@ -48,6 +22,34 @@ void print_matrix(float *matrix, int height, int width){
 		}
 		printf("\n");
 	}
+}
+
+int isConnected(float *hyst, int x, int y, int height, int width, int comm_rank, int comm_size){
+	int tgr, bgr;
+	
+	if(comm_rank==0){
+		tgr=0;
+		bgr=1;
+	}
+	else if(comm_rank==(comm_size-1)){
+		tgr=1;
+		bgr=0;
+	}
+	else{
+		tgr=1;
+		bgr=1;
+	}
+	
+	for(int y_offset=(-1); y_offset<=1; y_offset++){
+		for(int x_offset=(-1); x_offset<=1; x_offset++){
+			if(inBounds(x+x_offset, y+y_offset, height, width, 0, 0) &&
+				*(hyst+(y+y_offset)*width+x_offset+x)==255){
+				//printf("%d %d\n", x_offset+x, y_offset+y);
+				return 1;
+			}
+		}
+	}
+	return 0;
 }
 
 // Returns neg if b > a abd pos of a > b
@@ -123,8 +125,8 @@ float bottomLeft(float *arr, int x, int y, int height, int width, int ngr){
 
 void suppress(float *mag, float *phase, float **sup, int height, int width, int comm_rank, int comm_size){
 	memcpy(*sup, mag, sizeof(float)*height*width);	
-	
-	int tgr, bgr;
+		
+	int tgr, bgr, count=0;
 	if(comm_rank==0){
 		tgr=0; bgr=1;
 	}
@@ -146,26 +148,35 @@ void suppress(float *mag, float *phase, float **sup, int height, int width, int 
 
 			if(theta<=22.5 || theta >157.5){
 				if(left(mag,j,i,width) > *(mag+i*width+j)
-				   	|| right(mag,j,i,width) > *(mag+i*width+j))
+				   	|| right(mag,j,i,width) > *(mag+i*width+j)){
 					*(*sup+i*width+j)=0; 
+					count+=1;
+				}
 			}
 			else if(theta>22.5 && theta<=67.5){
-				if(topLeft(mag,j,i,width,height, tgr) > *(mag+i*width+j)
-					|| bottomRight(mag,j,i,height,width,bgr) > *(mag+i*width+j))
+				if(topLeft(mag,j,i,height,width, tgr) > *(mag+i*width+j)
+					|| bottomRight(mag,j,i,height,width,bgr) > *(mag+i*width+j)){
 					*(*sup+i*width+j)=0; 
+					count+=1;
+				}
 			}
 			else if(theta>67.5 && theta<=112.5){
 				if(top(mag,j,i,height,width,tgr) > *(mag+i*width+j) 
-					|| bottom(mag,j,i,height,width,bgr) > *(mag+i*width+j))
+					|| bottom(mag,j,i,height,width,bgr) > *(mag+i*width+j)){
 					*(*sup+i*width+j)=0; 
+					count+=1;
+				}
 			}
 			else if(theta>112.5 && theta<=157.5){
 				if(topRight(mag,j,i,height,width,tgr) > *(mag+i*width+j) 
-					|| bottomLeft(mag,j,i,height,width,bgr) > *(mag+i*width+j))
+					|| bottomLeft(mag,j,i,height,width,bgr) > *(mag+i*width+j)){
 					*(*sup+i*width+j)=0; 
+					count+=1;
+				}
 			}
 		}
 	}
+	printf("COUNT %d\n", count);
 }
 
 void hysteresis(float *sup, float **hyst, int height, int width, float t_high, float t_low){
@@ -342,7 +353,8 @@ int main(int argc, char **argv){
 		      *h_grad, *v_grad, *mag, *phase, *sup, *hyst, 
 		      *subimage, *edges, *th_grad, *fh_grad, *tv_grad,
 		      *fv_grad, *tmag, *tphase, *ft_sup, *t_sup, t_high,
-		       t_low, *sorted, *ft_hyst, *t_edges, *ft_edges, *th_grad_gr;	
+		       t_low, *sorted, *ft_hyst, *t_edges, *ft_edges, *th_grad_gr,
+		      *th_ver;	
 
 		MPI_Init(&argc,&argv);
 		MPI_Comm_size(MPI_COMM_WORLD, &comm_size);
@@ -393,7 +405,7 @@ int main(int argc, char **argv){
 				comm_size, comm_rank);
 		
 
-		th_grad_gr = sr_ghost(t_hor, height/comm_size, width, 0, comm_size, comm_rank);
+		th_grad_gr = sr_ghost(t_hor, height/comm_size, width, floor(k_width/2), comm_size, comm_rank);
 		fh_grad = (float*)malloc(sizeof(float)*width*(height/comm_size));
 		convolve(th_grad_gr, &fh_grad, dg_kernel, height/comm_size, width, 1, k_width,
 				comm_size, comm_rank);
@@ -402,18 +414,19 @@ int main(int argc, char **argv){
 				width*(height/comm_size), MPI_FLOAT, 0, MPI_COMM_WORLD);
 
 		// VERTICAL GRADIENT //
-		tv_grad = sr_ghost(subimage, height/comm_size, width, 0, comm_size, comm_rank);
-		convolve(tv_grad, &t_ver, g_kernel, height/comm_size, width, 1, k_width,
+		//tv_grad = sr_ghost(subimage, height/comm_size, width, 0, comm_size, comm_rank);
+		t_ver = (float*)malloc(sizeof(float)*width*(height/comm_size));
+		convolve(th_grad, &t_ver, g_kernel, height/comm_size, width, 1, k_width,
 				comm_size, comm_rank);
 		
 		fv_grad = (float*) malloc(sizeof(float)*width*(height/comm_size));
-		t_ver = sr_ghost(t_ver, height/comm_size, width, floor(k_width/2), comm_size, comm_rank);
-		convolve(t_ver, &fv_grad, dg_kernel, height, width, k_width, 1,
+		th_ver = sr_ghost(t_ver, height/comm_size, width, floor(k_width/2), comm_size, comm_rank);
+		convolve(th_ver, &fv_grad, dg_kernel, height/comm_size, width, k_width, 1,
 				comm_size, comm_rank);
 
 		MPI_Gather(fv_grad, width*(height/comm_size), MPI_FLOAT, v_grad,
 				width*(height/comm_size), MPI_FLOAT, 0, MPI_COMM_WORLD);
-		
+	
 		// MAGNITUDE AND PHASE //
 		tmag = (float*)malloc(sizeof(float)*(height/comm_size)*width);
 		tphase = (float*)malloc(sizeof(float)*(height/comm_size)*width);
@@ -441,7 +454,7 @@ int main(int argc, char **argv){
 			memcpy(sorted, sup, sizeof(float)*height*width);
 			qsort(sorted, height*width, sizeof(float), floatcomp);
 
-			t_high = *(sorted+(int)(.9*height*width));
+			t_high = *(sorted+(int)(.95*height*width));
 			t_low = t_high/5;
 			
 			free(sorted);
@@ -458,7 +471,6 @@ int main(int argc, char **argv){
 		
 	
 		// EDGES //
-
 		t_edges = sr_ghost(ft_hyst, height/comm_size, width, 1, comm_size, comm_rank);
 		find_edges(t_edges, &ft_edges, height/comm_size, width, comm_size, comm_rank);	
 	
@@ -469,10 +481,10 @@ int main(int argc, char **argv){
 			
 		if(comm_rank==0){
 			gettimeofday(&end, NULL);
-			write_image_template("h_grad_MPI.pgm", h_grad, width, height);
-			write_image_template("v_grad_MPI.pgm", v_grad, width, height);
-			write_image_template("mag_MPI.pgm", mag, width, height);
-			write_image_template("phase_MPI.pgm", phase, width, height);
+			//write_image_template("h_grad_MPI.pgm", h_grad, width, height);
+			//write_image_template("v_grad_MPI.pgm", v_grad, width, height);
+			//write_image_template("mag_MPI.pgm", mag, width, height);
+			//write_image_template("phase_MPI.pgm", phase, width, height);
 			write_image_template("suppress_MPI.pgm", sup, width, height);
 			write_image_template("hysteresis_MPI.pgm", hyst, width, height);
 			write_image_template("edges_MPI.pgm",edges, width, height);
