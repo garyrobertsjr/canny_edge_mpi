@@ -126,7 +126,7 @@ float bottomLeft(float *arr, int x, int y, int height, int width, int ngr){
 void suppress(float *mag, float *phase, float **sup, int height, int width, int comm_rank, int comm_size){
 	memcpy(*sup, mag, sizeof(float)*height*width);	
 		
-	int tgr, bgr, count=0;
+	int tgr, bgr;
 	if(comm_rank==0){
 		tgr=0; bgr=1;
 	}
@@ -150,33 +150,28 @@ void suppress(float *mag, float *phase, float **sup, int height, int width, int 
 				if(left(mag,j,i,width) > *(mag+i*width+j)
 				   	|| right(mag,j,i,width) > *(mag+i*width+j)){
 					*(*sup+i*width+j)=0; 
-					count+=1;
 				}
 			}
 			else if(theta>22.5 && theta<=67.5){
 				if(topLeft(mag,j,i,height,width, tgr) > *(mag+i*width+j)
 					|| bottomRight(mag,j,i,height,width,bgr) > *(mag+i*width+j)){
 					*(*sup+i*width+j)=0; 
-					count+=1;
 				}
 			}
 			else if(theta>67.5 && theta<=112.5){
 				if(top(mag,j,i,height,width,tgr) > *(mag+i*width+j) 
 					|| bottom(mag,j,i,height,width,bgr) > *(mag+i*width+j)){
 					*(*sup+i*width+j)=0; 
-					count+=1;
 				}
 			}
 			else if(theta>112.5 && theta<=157.5){
 				if(topRight(mag,j,i,height,width,tgr) > *(mag+i*width+j) 
 					|| bottomLeft(mag,j,i,height,width,bgr) > *(mag+i*width+j)){
 					*(*sup+i*width+j)=0; 
-					count+=1;
 				}
 			}
 		}
 	}
-	printf("COUNT %d\n", count);
 }
 
 void hysteresis(float *sup, float **hyst, int height, int width, float t_high, float t_low){
